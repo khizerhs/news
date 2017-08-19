@@ -1,5 +1,7 @@
 # news
-Android Application to search and view news articles using NYTimes article search API.
+Android Application to search and view news articles using NYTimes article search API.<br/>
+
+To test the app, replace "YOUR_API_KEY" in MainActivity.java with your api key for the nytimes article search API.
 
 ## Demo:<br/>
 App Launch <br/>
