@@ -50,7 +50,8 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
     private TextView noResultsTextView;
     private CardView noNetworkCardView;
     private TextView noNetworkTextView;
-    //private OnLoadNewListener onLoadNewListener;
+    private boolean isGettingData;
+    private boolean gettingDataFromScroll;
 
 
 
@@ -77,6 +78,9 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
 
         Toolbar myToolbar = (Toolbar) findViewById(R.id.my_toolbar);
         setSupportActionBar(myToolbar);
+
+        isGettingData = false;
+        gettingDataFromScroll = false;
 
         linearLayout = (LinearLayout) findViewById(R.id.main_linear_layout);
 
@@ -108,8 +112,8 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
         //Flag to keep track of failures when getting data.
         getDataFailed = false;
         setupRecyclerView();
+        Log.d("Khizer-debug", "getData from onCreate");
         getData(pageNumber, query);
-
 
     }
 
@@ -138,7 +142,6 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
             countDownTimer.cancel();
     }
 
-
     @Override
     protected void onNewIntent(Intent intent) {
         Log.d("Khizer-debug", "I got a new intent");
@@ -149,19 +152,18 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
             query = intent.getStringExtra(SearchManager.QUERY);
             pageNumber = 1;
 
-            //using the same activity to update the results from the query.
-            invalidatePreviousData();
-            setupRecyclerView();
+            newsArticleList.clear();
+            newsRecyclerAdapter.notifyDataSetChanged();
 
             loadingAnimation.setVisibility(View.VISIBLE);
 
+            Log.d("Khizer-debug", "getData from on New Intent");
             getData(pageNumber, query);
 
             if (searchView != null)
                 searchView.clearFocus();
         }
     }
-
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -180,6 +182,19 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
 
     //Method to make a call to the server and get the articles data
     public void getData(int pageNumber, String query) {
+        if(isGettingData)
+            return;
+
+        if(gettingDataFromScroll) {
+            gettingDataFromScroll = false;
+
+            recyclerView.post(() -> {
+                newsArticleList.add(null);
+                newsRecyclerAdapter.notifyItemInserted(newsArticleList.size() - 1);
+            });
+
+        }
+
         if (noResultsCardView != null && noResultsCardView.getVisibility() == View.VISIBLE)
             noResultsCardView.setVisibility(View.GONE);
 
@@ -212,6 +227,8 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
             return;
         }
 
+        isGettingData = true;
+
         //RxJava call to get the articles
         //Getting a new page of articles(10 articles in each page) everytime a request is made.
         disposables.add(articleSearchService.getArticles(articleSearchQueries)
@@ -221,14 +238,15 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
                     @Override
                     public void onComplete() {
                         Log.d("khizer-debug", "Network call completed");
-                        newsRecyclerAdapter.notifyDataSetChanged();
                         newsRecyclerAdapter.setLoaded();
                         getDataFailed = false;
+                        isGettingData = false;
                     }
 
                     @Override
                     public void onError(Throwable e) {
                         getDataFailed = true;
+                        isGettingData = false;
                         Log.d("khizer-debug", "Error when making a network call"+ e.getMessage());
                         // This Animation is visible only when there are no articles in the recycler view
                         if(loadingAnimation!= null && loadingAnimation.getVisibility() == View.VISIBLE);
@@ -240,9 +258,6 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
 
                             NewsArticle n = new NewsArticle();
                             n.setError(e.getMessage());
-
-                            // set the listner to null to prevent making duplicate requests
-                            newsRecyclerAdapter.setOnLoadNewListener(null);
 
                             // Also remove the loading bar form the end.
                             newsArticleList.remove(newsArticleList.size() - 1);
@@ -257,14 +272,21 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
                     public void onNext(ResponseWrapper response) {
                         Log.d("khizer-debug", "got the response from the server");
 
-                        //Hide this animation as some data need to shonw on the recycler view
+                        //Hide this animation as some data need to shown on the recycler view
                         if(loadingAnimation!= null && loadingAnimation.getVisibility() == View.VISIBLE);
                             loadingAnimation.setVisibility(View.GONE);
 
-                        //Add all the articles
-                        if (newsArticleList.size() != 0)
+                        //Remove the progressbar from the bottom of the recycler view after done loading the next page
+                        if (newsArticleList.size() != 0) {
+                            // when loading for first time (when application starts), no progress bar is present so checking is size is 0
                             newsArticleList.remove(newsArticleList.size() - 1);
+                            newsRecyclerAdapter.notifyItemRemoved(newsArticleList.size() -1 );
+                        }
+                        //Add all the articles from the next page
+                        int initialSize = newsArticleList.size();
                         newsArticleList.addAll(response.getResponse().getNewsArticles());
+                        newsRecyclerAdapter.notifyItemRangeInserted(initialSize,
+                                newsArticleList.size() - initialSize);
 
                         // If the response is empty and the request is to get page 1,
                         // It is understood that there are no results for this query
@@ -300,13 +322,15 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
 
         //set load new listener for the RecyclerView adapter
         newsRecyclerAdapter.setOnLoadNewListener(() -> {
-            Log.d("KHizer-debug", "keading new data");
-            newsArticleList.add(null);
-            newsRecyclerAdapter.notifyItemInserted(newsArticleList.size() - 1);
-
-            pageNumber++;
-            getData(pageNumber, query);
+            if(!isGettingData && !getDataFailed) {
+                Log.d("KHizer-debug", "OnScrollListener after scroll");
+                gettingDataFromScroll = true;
+                pageNumber++;
+                Log.d("Khizer-debug", "getData from OnScroll");
+                getData(pageNumber, query);
+            }
         });
+
     }
 
     private void invalidatePreviousData() {
@@ -332,16 +356,17 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
         newsArticleList.remove(newsArticleList.size() - 1);
         newsArticleList.add(null);
         newsRecyclerAdapter.notifyItemChanged(newsArticleList.size() - 1);
+        Log.d("Khizer-debug", "getData from onNetworkErrorClick");
         getData(pageNumber,query);
 
-        newsRecyclerAdapter.setOnLoadNewListener(() -> {
+    /*    newsRecyclerAdapter.setOnLoadNewListener(() -> {
             Log.d("KHizer-debug", "keading new data");
             newsArticleList.add(null);
             newsRecyclerAdapter.notifyItemInserted(newsArticleList.size() - 1);
 
             pageNumber++;
             getData(pageNumber, query);
-        });
+        });*/
     }
 
     /******************
@@ -373,13 +398,17 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
                         multiplier = 1;
                         //Snackbar is dismissed automatically
                         //check network access and retry to get the data.
-                        if (Util.isNetworkAvailable(MainActivity.this) && getDataFailed) {
-                            if(loadingAnimation != null && newsArticleList.size() == 0)
-                                loadingAnimation.setVisibility(View.VISIBLE);
-                            getData(pageNumber, query);
+                        if (Util.isNetworkAvailable(MainActivity.this)){
+                            if (getDataFailed) {
+                                if (loadingAnimation != null && newsArticleList.size() == 0)
+                                    loadingAnimation.setVisibility(View.VISIBLE);
+                                Log.d("Khizer-debug", "getData from Snackbar-Tryagain click");
+                                getData(pageNumber, query);
+                            }
                         } else {
                             showSnackbar();
                         }
+
                     }
                 });
 
@@ -410,10 +439,12 @@ public class MainActivity extends AppCompatActivity implements OnArticleClickLis
                 multiplier *= 2;
                 if (Util.isNetworkAvailable(MainActivity.this)) {
                     hideSnackbar();
-                    if(getDataFailed)
-                        if(loadingAnimation != null && newsArticleList.size() == 0)
+                    if(getDataFailed) {
+                        if (loadingAnimation != null && newsArticleList.size() == 0)
                             loadingAnimation.setVisibility(View.VISIBLE);
+                        Log.d("Khizer-debug", "getData from onFinish COunter");
                         getData(pageNumber, query);
+                    }
                 } else {
                     showSnackbar();
                 }
